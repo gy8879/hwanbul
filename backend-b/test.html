@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>환불도우미 테스트</title>
+  <style>
+    body { font-family: sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }
+    h1 { color: #333; }
+    h2 { color: #555; margin-top: 40px; }
+    textarea { width: 100%; height: 100px; padding: 10px; font-size: 14px; }
+    input, select { width: 100%; padding: 10px; margin: 5px 0; font-size: 14px; }
+    button { background: #4CAF50; color: white; padding: 12px 24px; border: none; cursor: pointer; font-size: 16px; margin-top: 10px; border-radius: 4px; }
+    button:hover { background: #45a049; }
+    .result { background: #f4f4f4; padding: 20px; margin-top: 20px; border-radius: 8px; white-space: pre-wrap; }
+    .danger { color: red; font-weight: bold; }
+    .safe { color: green; font-weight: bold; }
+    label { font-weight: bold; display: block; margin-top: 10px; }
+  </style>
+</head>
+<body>
+
+  <h1>환불도우미 테스트 화면</h1>
+
+  <!-- 부당계약서 분석 -->
+  <h2>1. 부당계약서 의심알림</h2>
+  <label>계약서 내용</label>
+  <textarea id="contract" placeholder="계약서 내용을 입력하세요. 예: 본 계약은 환불이 불가합니다."></textarea>
+  <label>업종</label>
+  <select id="industry1">
+    <option>헬스장</option>
+    <option>필라테스</option>
+    <option>학원</option>
+  </select>
+  <button onclick="analyzeContract()">계약서 분석하기</button>
+  <div id="contractResult" class="result" style="display:none"></div>
+
+  <!-- 환불 문구 생성 -->
+  <h2>2. 환불요청문구 생성</h2>
+  <label>업종</label>
+  <select id="industry2">
+    <option>헬스장</option>
+    <option>필라테스</option>
+    <option>학원</option>
+  </select>
+  <label>업체명</label>
+  <input id="company" placeholder="예: 강남헬스클럽" />
+  <label>결제금액 (원)</label>
+  <input id="price" type="number" placeholder="예: 300000" />
+  <label>이용일수</label>
+  <input id="days" type="number" placeholder="예: 12" />
+  <label>환불예상금 (원)</label>
+  <input id="refund" type="number" placeholder="예: 240000" />
+  <label>부당위약금 (원)</label>
+  <input id="penalty" type="number" placeholder="예: 60000" />
+  <button onclick="generateMessage()">문구 생성하기</button>
+  <div id="messageResult" class="result" style="display:none"></div>
+
+  <script>
+    const BASE = 'http://127.0.0.1:8000';
+
+    async function analyzeContract() {
+      const result = document.getElementById('contractResult');
+      result.style.display = 'block';
+      result.textContent = '분석 중...';
+      const res = await fetch(`${BASE}/api/b/analyze/contract`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          계약서_텍스트: document.getElementById('contract').value,
+          업종: document.getElementById('industry1').value
+        })
+      });
+      const data = await res.json();
+      result.innerHTML = `
+위험도: <span class="${data.위험도 === '높음' ? 'danger' : 'safe'}">${data.위험도}</span>
+부당조항 수: ${data.부당조항_수}개
+총평: ${data.총평}
+
+탐지된 조항:
+${data.탐지된_조항.map(j => `- "${j.원문}" → ${j.판정} (${j.근거법령})`).join('\n')}
+      `;
+    }
+
+    async function generateMessage() {
+      const result = document.getElementById('messageResult');
+      result.style.display = 'block';
+      result.textContent = '문구 생성 중...';
+      const res = await fetch(`${BASE}/api/b/generate/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          업종: document.getElementById('industry2').value,
+          업체명: document.getElementById('company').value,
+          결제금액: Number(document.getElementById('price').value),
+          이용일수: Number(document.getElementById('days').value),
+          환불예상금: Number(document.getElementById('refund').value),
+          부당위약금: Number(document.getElementById('penalty').value)
+        })
+      });
+      const data = await res.json();
+      result.innerHTML = `
+📱 카카오톡용:
+${data.카카오톡용}
+
+📧 이메일용:
+${data.이메일용}
+
+⚠️ 강경대응용:
+${data.강경대응용}
+      `;
+    }
+  </script>
+</body>
+</html>
