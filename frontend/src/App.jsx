@@ -1,13 +1,48 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { analyzeContract, checkHealth, generateMessage } from './api'
 import { extractText } from './pdf'
+import { DISPUTE_DOCS, openPrintWindow } from './disputeDocs'
 import heroDumbbell from './assets/hero-dumbbell.png'
 import heroClipboard from './assets/hero-clipboard.png'
 import heroEnvelope from './assets/hero-envelope.png'
 
 const INDUSTRIES = [
-  { value: 'gym', label: '헬스장' },
-  { value: 'pilates', label: '필라테스' },
+  {
+    value: 'gym',
+    label: '헬스장',
+    refundLaw: '체육시설업법 및 방문판매법, 소비자분쟁해결기준',
+    penaltyCapNote: '체육시설업법상 위약금은 총금액의 10% 이내로 제한됩니다.',
+    typicalTraps: ['이벤트가 결제 후 정상가 기준 환불 산정', 'PT 끼워팔기 회차 분리'],
+  },
+  {
+    value: 'pilates',
+    label: '필라테스',
+    refundLaw: '방문판매법 및 소비자분쟁해결기준',
+    penaltyCapNote: '위약금은 일반적으로 잔여 대금의 10% 이내로 안내됩니다.',
+    typicalTraps: ['그룹/개인 회차 혼합 가격 분리', '이벤트가 결제 후 정상가 환불 산정'],
+  },
+  {
+    value: 'yoga',
+    label: '요가',
+    refundLaw: '방문판매법 및 소비자분쟁해결기준',
+    penaltyCapNote: '위약금은 일반적으로 잔여 대금의 10% 이내로 안내됩니다.',
+    typicalTraps: ['이벤트가 결제 후 정상가 환불 산정', '회차권 미사용분 환불 거부'],
+  },
+  {
+    value: 'academy',
+    label: '학원·과외',
+    refundLaw: '학원의 설립·운영 및 과외교습에 관한 법률 시행령 제18조',
+    penaltyCapNote: '학원법 시행령상 수강료는 미경과 기간에 대해 일할 환불이 원칙입니다.',
+    typicalTraps: ['교재비·관리비 환불 거부', '월 단위 절상 환불'],
+  },
+  {
+    value: 'skincare',
+    label: '피부·미용 시술권',
+    refundLaw: '방문판매법 및 소비자분쟁해결기준',
+    penaltyCapNote:
+      '회차권은 미사용 회차에 대해 환불 가능하며, 이벤트가 적용 시에도 결제 금액 기준으로 환불 산정하는 것이 일반적입니다.',
+    typicalTraps: ['미사용 회차 환불 거부', '정상가 기준 환산으로 환불액 축소'],
+  },
 ]
 
 const REQUEST_TYPES = [
@@ -34,17 +69,19 @@ const FEATURE_CARDS = [
   {
     tag: '01 / 상황 입력',
     title: '계약 정보를 그대로 붙여넣기',
-    desc: '업종, 결제금액, 이용기간. 정확하지 않아도 괜찮아요. 1분이면 끝나요.',
+    desc: '업종, 결제금액, 이용기간. 계약서 사진·PDF도 자동으로 텍스트만 뽑아 채워넣어요.',
   },
   {
-    tag: '02 / 즉시 계산',
-    title: '받을 금액을 표준 기준으로',
-    desc: '소비자분쟁해결기준에 맞춰 환불금과 위약금을 계산해요. 안내받은 금액과 차이도 한눈에.',
+    tag: '02 / 함정까지 계산',
+    title: '단순 일할이 아닌, 실제 분쟁 케이스로',
+    desc:
+      '이벤트가/정상가 환산, 회차권 미사용분, 위약금 10% 상한 등 일반 계산기가 못 잡는 함정을 자동으로 짚어줘요.',
   },
   {
-    tag: '03 / 바로 전송',
-    title: '문구 복사해서 그대로',
-    desc: '카톡, 이메일, 강경대응까지. 상황에 맞는 문구를 골라 복사해 보내세요.',
+    tag: '03 / 분쟁 서류 패키지',
+    title: '업체가 거부하면 다음 무기까지',
+    desc:
+      '환불 요청 문구는 무료. 결제하면 내용증명 · 소비자원 1372 신청서 · 카드 항변권 행사 신청서까지 본인 명의로 바로 발송 가능한 양식으로 발급해드려요.',
   },
 ]
 
@@ -52,6 +89,7 @@ const initialForm = {
   industry: '',
   vendorName: '',
   totalPaid: '',
+  originalPrice: '',
   contractDays: '',
   usedDays: '',
   vendorRefund: '',
@@ -59,6 +97,8 @@ const initialForm = {
   vendorPolicyText: '',
   refundReason: '',
   requestType: 'kakao',
+  userName: '',
+  paymentMethod: 'card',
 }
 
 function parseAmount(raw) {
@@ -79,6 +119,7 @@ function findWarnings(text) {
 
 function computeRefund(form) {
   const totalPaid = parseAmount(form.totalPaid)
+  const originalPrice = parseAmount(form.originalPrice)
   const contractDays = parseAmount(form.contractDays)
   const usedDays = parseAmount(form.usedDays)
   const vendorRefund = parseAmount(form.vendorRefund)
@@ -96,24 +137,71 @@ function computeRefund(form) {
 
   const ratio = Math.min(Math.max(usedDays / contractDays, 0), 1)
   const usageFee = totalPaid * ratio
+  const penaltyCap = totalPaid * 0.1
   const penalty =
     Number.isFinite(vendorPenaltyInput) && vendorPenaltyInput > 0
       ? vendorPenaltyInput
-      : totalPaid * 0.1
-  const expectedRefund = totalPaid - usageFee - penalty
+      : penaltyCap
+  const expectedRefund = Math.max(totalPaid - usageFee - penalty, 0)
   const vendorGuided = Number.isFinite(vendorRefund) && vendorRefund >= 0 ? vendorRefund : 0
   const diff = expectedRefund - vendorGuided
   const warnings = findWarnings(form.vendorPolicyText)
 
+  const usageFeeIfOriginal =
+    Number.isFinite(originalPrice) && originalPrice > totalPaid
+      ? originalPrice * ratio
+      : null
+  const expectedRefundIfOriginal =
+    usageFeeIfOriginal != null
+      ? Math.max(totalPaid - usageFeeIfOriginal - penalty, 0)
+      : null
+
+  const flags = []
+
+  if (
+    Number.isFinite(vendorPenaltyInput) &&
+    vendorPenaltyInput > 0 &&
+    vendorPenaltyInput > penaltyCap
+  ) {
+    flags.push({
+      id: 'penalty_over_cap',
+      severity: 'high',
+      title: '위약금이 총금액의 10%를 초과해요',
+      body: `업체 안내 위약금 ${formatWon(vendorPenaltyInput)}은 총 결제금액의 10%(${formatWon(penaltyCap)})를 초과합니다. 체육시설업법·소비자분쟁해결기준상 일반적으로 다투어지는 표현입니다.`,
+    })
+  }
+
+  if (usageFeeIfOriginal != null && expectedRefundIfOriginal != null) {
+    flags.push({
+      id: 'event_vs_original',
+      severity: 'high',
+      title: '이벤트가 / 정상가 환산 차이',
+      body: `정상가 ${formatWon(originalPrice)} 기준으로 위약금을 산정하면 환불액이 ${formatWon(expectedRefundIfOriginal)}로 줄어듭니다. 결제 기준가(${formatWon(totalPaid)})로 환불을 산정하는 것이 일반적으로 안내됩니다.`,
+    })
+  }
+
+  if (vendorGuided > 0 && expectedRefund - vendorGuided > totalPaid * 0.1) {
+    flags.push({
+      id: 'vendor_underpay',
+      severity: 'mid',
+      title: '업체 안내 금액이 표준보다 낮아요',
+      body: `표준 기준 예상 환불금 ${formatWon(expectedRefund)}과 업체 안내 ${formatWon(vendorGuided)} 차이가 ${formatWon(expectedRefund - vendorGuided)}로 큽니다. 근거 자료를 요청해보시는 것을 권장합니다.`,
+    })
+  }
+
   return {
     ok: true,
     totalPaid,
+    originalPrice: Number.isFinite(originalPrice) ? originalPrice : null,
     usageFee,
     penalty,
+    penaltyCap,
     expectedRefund,
     vendorGuided,
     diff,
     warnings,
+    flags,
+    expectedRefundIfOriginal,
   }
 }
 
@@ -190,27 +278,47 @@ function PricingModal({ open, onClose, onPurchase, paid }) {
             </button>
           </div>
           <p className="mt-4 text-[14px] font-semibold text-[#0d3d24]">
-            환불 계산 리포트
+            AI 맞춤 분석 · 작성 리포트
           </p>
           <p className="mt-1 text-[32px] font-black tabular-nums text-[#0d3d24]">
             {PRICE_WON.toLocaleString('ko-KR')}원
           </p>
           <p className="mt-1 text-[12px] text-[#0d3d24]/80">
-            결제 1회, 모든 결과 화면 잠금 해제
+            1회 결제, 이번 세션 동안 AI 기능 모두 사용
           </p>
         </div>
 
         <div className="px-6 py-5">
-          <ul className="space-y-2 text-[14px] text-[var(--text-main)]">
-            <li>· 환불금 / 위약금 / 차이 계산</li>
-            <li>· 약관 문구 체크 결과 (분쟁 가능성 안내)</li>
-            <li>· 카톡용 + 이메일용 + 정식 요청 문구 3종</li>
-            <li>· 분쟁 대비 PDF 증빙 (예정)</li>
-          </ul>
+          <div className="rounded-2xl bg-[var(--bg-main)] p-4">
+            <p className="text-[12px] font-bold uppercase tracking-wide text-[var(--text-sub)]">
+              무료로 제공돼요
+            </p>
+            <ul className="mt-2 space-y-1.5 text-[13px] text-[var(--text-main)]">
+              <li>· 환불금 / 위약금 / 업체 안내와의 차이 계산</li>
+              <li>· 이벤트가·정상가 환산, 위약금 10% 상한 함정 자동 진단</li>
+              <li>· 카톡 · 이메일 · 정식 요청 기본 템플릿 문구</li>
+              <li>· 계약서 PDF · 사진 자동 텍스트 추출</li>
+            </ul>
+          </div>
+
+          <div className="mt-3 rounded-2xl border border-[var(--mint-main)] bg-[var(--mint-light)]/30 p-4">
+            <p className="text-[12px] font-bold uppercase tracking-wide text-[#0d3d24]">
+              결제하면 추가돼요 — 분쟁 서류 패키지
+            </p>
+            <ul className="mt-2 space-y-1.5 text-[13px] text-[var(--text-main)]">
+              <li>· <strong>환불 요청 내용증명</strong> 양식 (등기 우편 그대로 송부 가능)</li>
+              <li>· <strong>한국소비자원 1372 분쟁조정 신청서</strong> 양식</li>
+              <li>· <strong>카드 할부거래 항변권 행사 신청서</strong> 양식</li>
+              <li>· 약관·상황을 반영한 <strong>AI 맞춤 요청 문구</strong> (세 채널 모두)</li>
+            </ul>
+            <p className="mt-3 text-[11px] leading-relaxed text-[#0d3d24]/80">
+              ※ 모든 양식은 <strong>본인 명의로 본인이 직접 송부</strong>하시는 보조 양식입니다. 본 서비스는 양식 작성을 도와드릴 뿐, 신고·발송을 대리하지 않습니다.
+            </p>
+          </div>
 
           <p className="mt-4 text-[12px] leading-relaxed text-[var(--text-sub)]">
-            ※ 본 결제는 「환불 계산 리포트 발급 및 문서 작성 보조」 서비스
-            이용료입니다. 법률 자문 보수가 아닙니다.
+            ※ 본 결제는 「양식 작성 보조 · 정보 안내」 서비스 이용료입니다. 법률 자문
+            보수가 아닙니다.
           </p>
 
           {paid ? (
@@ -296,7 +404,7 @@ function TopBanner({ onClose }) {
             1분 환불 정리
           </span>
           <p className="text-[13px] text-white/70">
-            받을 금액 계산, 보낼 문구 작성, 분쟁 증빙까지 한 번에
+            받을 금액 계산 · 보낼 문구 · 분쟁 서류까지 한 번에
           </p>
           <p className="text-[14px] font-semibold text-white">
             양심 업체든 부당 업체든 — 정확한 숫자 한 장이면 끝
@@ -359,7 +467,7 @@ function NavBar({ onStart, onOpenPricing }) {
   )
 }
 
-function Hero({ onStart }) {
+function Hero({ onStart, onOpenHowItWorks }) {
   return (
     <section className="relative mx-auto max-w-6xl overflow-visible px-6 pt-16 pb-20 text-center sm:pt-24 sm:pb-28 lg:pt-28 lg:pb-32">
       {/* 큼직한 3D 아이콘 — 본문 뒤(z-0)에 겹쳐 배치. 살짝 화면 밖으로 흘려 비대칭 + 시각 무게 */}
@@ -416,9 +524,9 @@ function Hero({ onStart }) {
         <span className="opacity-50">감정싸움 없이</span>
       </h1>
       <p className="mx-auto mt-8 max-w-xl text-[16px] leading-relaxed text-[var(--text-sub)] sm:text-[18px]">
-        받을 금액 계산부터 보낼 문구까지, 환불을 한 번에 정리하세요.
+        헬스·필라테스·요가·학원·시술권 — 멤버십 환불을 한 번에 정리하세요.
         <br className="hidden sm:block" />
-        양심 업체든 부당 업체든 — 정확한 숫자 한 장이면 됩니다.
+        업체가 거부해도 내용증명·소비자원 신청서·카드 항변권까지 그대로 준비돼요.
       </p>
       <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
         <button
@@ -430,6 +538,7 @@ function Hero({ onStart }) {
         </button>
         <button
           type="button"
+          onClick={onOpenHowItWorks}
           className="rounded-full border border-black/[0.08] bg-white px-7 py-3.5 text-[16px] font-semibold text-[var(--text-main)] transition hover:bg-[var(--bg-main)]"
         >
           어떻게 동작하나요
@@ -495,18 +604,116 @@ function FeatureSection({ onStart }) {
   )
 }
 
+function HowItWorksModal({ open, onClose, onStart }) {
+  if (!open) return null
+  const steps = [
+    {
+      n: '1',
+      title: '정보 입력 (무료)',
+      body: '업종, 결제 금액, 약정·사용 기간, 업체 안내 금액을 넣어요. 계약서 PDF나 사진을 올리면 텍스트를 자동으로 채워줘요.',
+    },
+    {
+      n: '2',
+      title: '예상 환불 + 함정 진단 (무료)',
+      body: '받을 금액·위약금·업체 안내와의 차이를 표준 기준으로 계산해요. 이벤트가/정상가, 위약금 10% 상한 같은 함정도 자동으로 짚어드려요.',
+    },
+    {
+      n: '3',
+      title: '환불 요청 문구 (무료)',
+      body: '카톡·이메일·정식 요청 세 채널 모두 기본 템플릿 문구로 복사할 수 있어요. 결제하면 약관·상황을 반영한 AI 맞춤 문구로 자동 교체돼요.',
+    },
+    {
+      n: '4',
+      title: '분쟁 서류 패키지 (유료)',
+      body: '업체가 거부하면? 본인 명의로 바로 보낼 수 있는 내용증명·한국소비자원 1372 분쟁조정 신청서·카드 할부 항변권 행사 신청서 양식을 발급해드려요.',
+    },
+  ]
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-4 sm:items-center"
+      onClick={onClose}
+    >
+      <div
+        className="max-h-[85dvh] w-full max-w-lg overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl sm:p-8"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-[20px] font-extrabold tracking-tight text-[var(--text-main)]">
+              어떻게 동작하나요?
+            </h2>
+            <p className="mt-1 text-[14px] text-[var(--text-sub)]">
+              4단계면 끝나요. 복잡한 법률 용어 없이 숫자와 문구만 정리해 드려요.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="shrink-0 rounded-full p-2 text-[var(--text-sub)] hover:bg-[var(--bg-main)]"
+            aria-label="닫기"
+          >
+            ✕
+          </button>
+        </div>
+
+        <ol className="mt-6 space-y-3">
+          {steps.map((s) => (
+            <li
+              key={s.n}
+              className="flex gap-3 rounded-2xl border border-black/[0.06] bg-[var(--bg-main)] p-4 text-left"
+            >
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--mint-main)] text-[15px] font-black text-[#0d3d24]">
+                {s.n}
+              </span>
+              <div>
+                <p className="text-[15px] font-bold text-[var(--text-main)]">{s.title}</p>
+                <p className="mt-1 text-[13px] leading-relaxed text-[var(--text-sub)]">{s.body}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+
+        <p className="mt-4 text-[12px] leading-relaxed text-[var(--text-sub)]">
+          본 서비스는 법률 자문이 아닌 계산·정보 안내 도구입니다. 분쟁이 크면 한국소비자원(1372) 상담을 권장드려요.
+        </p>
+
+        <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:flex-row-reverse sm:justify-start">
+          <button
+            type="button"
+            onClick={() => {
+              onClose()
+              onStart()
+            }}
+            className="w-full rounded-2xl bg-[var(--mint-main)] py-3.5 text-[15px] font-bold text-[#0d3d24] sm:w-auto sm:min-w-[12rem]"
+          >
+            1분 환불 정리 시작
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-full rounded-2xl border border-black/[0.08] bg-white py-3.5 text-[15px] font-semibold text-[var(--text-main)] sm:w-auto sm:min-w-[7rem]"
+          >
+            닫기
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Landing({
   onStart,
   bannerOpen,
   setBannerOpen,
   onOpenTerms,
   onOpenPricing,
+  onOpenHowItWorks,
 }) {
   return (
     <div className="min-h-dvh overflow-x-hidden bg-white">
       {bannerOpen ? <TopBanner onClose={() => setBannerOpen(false)} /> : null}
       <NavBar onStart={onStart} onOpenPricing={onOpenPricing} />
-      <Hero onStart={onStart} />
+      <Hero onStart={onStart} onOpenHowItWorks={onOpenHowItWorks} />
       <FeatureSection onStart={onStart} />
       <Footer onOpenTerms={onOpenTerms} onOpenPricing={onOpenPricing} />
     </div>
@@ -758,6 +965,7 @@ export default function App() {
   const [backendOnline, setBackendOnline] = useState(null)
   const [termsOpen, setTermsOpen] = useState(false)
   const [pricingOpen, setPricingOpen] = useState(false)
+  const [howItWorksOpen, setHowItWorksOpen] = useState(false)
   const [paid, setPaid] = useState(() => {
     if (typeof window === 'undefined') return false
     return window.sessionStorage.getItem(PAID_STORAGE_KEY) === '1'
@@ -933,6 +1141,12 @@ export default function App() {
           setBannerOpen={setBannerOpen}
           onOpenTerms={() => setTermsOpen(true)}
           onOpenPricing={() => setPricingOpen(true)}
+          onOpenHowItWorks={() => setHowItWorksOpen(true)}
+        />
+        <HowItWorksModal
+          open={howItWorksOpen}
+          onClose={() => setHowItWorksOpen(false)}
+          onStart={goStep2}
         />
         <TermsModal open={termsOpen} onClose={() => setTermsOpen(false)} />
         <PricingModal
@@ -987,22 +1201,42 @@ export default function App() {
             </SelectInput>
           </div>
 
-          <div>
-            <FieldLabel optional>업체명</FieldLabel>
-            <TextInput
-              placeholder="예: 강남헬스클럽"
-              value={form.vendorName}
-              onChange={(e) => updateField('vendorName', e.target.value)}
-            />
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <FieldLabel optional>본인 성명</FieldLabel>
+              <TextInput
+                placeholder="분쟁 서류용"
+                value={form.userName}
+                onChange={(e) => updateField('userName', e.target.value)}
+              />
+            </div>
+            <div>
+              <FieldLabel optional>업체명</FieldLabel>
+              <TextInput
+                placeholder="예: 강남헬스클럽"
+                value={form.vendorName}
+                onChange={(e) => updateField('vendorName', e.target.value)}
+              />
+            </div>
           </div>
 
           <div>
-            <FieldLabel>총 결제금액</FieldLabel>
+            <FieldLabel>총 결제금액 (실제 결제한 금액)</FieldLabel>
             <TextInput
               inputMode="decimal"
               placeholder="예: 1200000"
               value={form.totalPaid}
               onChange={(e) => updateField('totalPaid', e.target.value)}
+            />
+          </div>
+
+          <div>
+            <FieldLabel optional>정상가 (이벤트가로 결제한 경우만)</FieldLabel>
+            <TextInput
+              inputMode="decimal"
+              placeholder="이벤트가 결제 시 정상가를 입력하면 함정 진단을 받을 수 있어요"
+              value={form.originalPrice}
+              onChange={(e) => updateField('originalPrice', e.target.value)}
             />
           </div>
 
@@ -1131,6 +1365,33 @@ export default function App() {
           </div>
 
           <div>
+            <FieldLabel optional>결제 수단</FieldLabel>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { v: 'card', l: '신용카드 일시불' },
+                { v: 'installment', l: '신용카드 할부' },
+                { v: 'etc', l: '기타' },
+              ].map((opt) => (
+                <button
+                  key={opt.v}
+                  type="button"
+                  onClick={() => updateField('paymentMethod', opt.v)}
+                  className={`rounded-full px-4 py-2 text-[14px] font-semibold transition ${
+                    form.paymentMethod === opt.v
+                      ? 'bg-[var(--mint-main)] text-[#0d3d24]'
+                      : 'bg-[var(--bg-main)] text-[var(--text-sub)]'
+                  }`}
+                >
+                  {opt.l}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-[11px] text-[var(--text-sub)]">
+              * 할부 결제인 경우, 환불 거부 시 카드사에 「할부거래법」 제16조 항변권 행사가 가능해요.
+            </p>
+          </div>
+
+          <div>
             <FieldLabel>요청 문구 유형</FieldLabel>
             <div className="flex flex-wrap gap-2">
               {REQUEST_TYPES.map((t) => {
@@ -1167,9 +1428,9 @@ export default function App() {
 
         <p className="mt-4 text-center text-[12px] text-[var(--text-sub)]">
           {backendOnline === true
-            ? 'AI 도우미 연결됨 — 약관 문구 체크 + 요청 문구 정리 가능'
+            ? '기본 계산·템플릿 문구는 무료, AI 맞춤 분석·문구는 결제 후 자동 적용돼요.'
             : backendOnline === false
-              ? 'AI 도우미 미연결 — 기본 계산 로직으로 동작'
+              ? 'AI 도우미 미연결 — 기본 계산·템플릿으로 동작'
               : '연결 상태 확인 중...'}
         </p>
         <TermsModal open={termsOpen} onClose={() => setTermsOpen(false)} />
@@ -1228,9 +1489,49 @@ export default function App() {
           </div>
         </Card>
 
+        {result.calc.flags && result.calc.flags.length > 0 ? (
+          <div className="mt-5 space-y-3">
+            <p className="text-[13px] font-bold uppercase tracking-wide text-[var(--text-sub)]">
+              함정 진단 — 자주 다투어지는 항목
+            </p>
+            {result.calc.flags.map((f) => (
+              <div
+                key={f.id}
+                className={`rounded-3xl border px-5 py-4 ${
+                  f.severity === 'high'
+                    ? 'border-amber-200 bg-amber-50'
+                    : 'border-black/[0.06] bg-white'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-[15px] font-bold text-[var(--text-main)]">
+                    {f.title}
+                  </p>
+                  <span
+                    className={`shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-bold ${
+                      f.severity === 'high'
+                        ? 'bg-amber-200 text-amber-900'
+                        : 'bg-[var(--bg-main)] text-[var(--text-sub)]'
+                    }`}
+                  >
+                    {f.severity === 'high' ? '확인 필요' : '참고'}
+                  </span>
+                </div>
+                <p className="mt-2 text-[13px] leading-relaxed text-[var(--text-main)]/90">
+                  {f.body}
+                </p>
+              </div>
+            ))}
+            <p className="text-[11px] text-[var(--text-sub)]">
+              ※ 공정거래위원회 「소비자분쟁해결기준」 등에서 자주 분쟁이 되는 표현을
+              참고한 일반 정보입니다. 법률 자문이 아닙니다.
+            </p>
+          </div>
+        ) : null}
+
         {!paid ? (
           <LockedCard
-            title="약관 문구 체크 결과"
+            title="AI 약관 표현 안내"
             onUnlock={() => setPricingOpen(true)}
           />
         ) : null}
@@ -1355,58 +1656,132 @@ export default function App() {
             {REQUEST_TYPES.map((t) => {
               const active = form.requestType === t.value
               const hasAi = !!result.aiMessages?.[t.apiKey]
-              const isFree = t.value === 'kakao'
-              const locked = !paid && !isFree
               return (
                 <button
                   key={t.value}
                   type="button"
-                  onClick={() => {
-                    if (locked) {
-                      setPricingOpen(true)
-                      return
-                    }
-                    updateField('requestType', t.value)
-                  }}
+                  onClick={() => updateField('requestType', t.value)}
                   className={`rounded-full px-3.5 py-1.5 text-[13px] font-semibold transition ${
                     active
                       ? 'bg-[var(--mint-main)] text-[#0d3d24]'
                       : 'border border-black/[0.08] bg-white text-[var(--text-sub)]'
                   }`}
                 >
-                  {locked ? <span className="mr-1">🔒</span> : null}
                   {t.label}
-                  {hasAi && !locked ? (
-                    <span className="ml-1 opacity-70">·AI</span>
-                  ) : null}
+                  {paid && hasAi ? <span className="ml-1 opacity-70">·AI</span> : null}
                 </button>
               )
             })}
           </div>
 
-          {paid || form.requestType === 'kakao' ? (
-            <Card className="mt-3">
-              <pre className="whitespace-pre-wrap break-words text-[14px] leading-relaxed text-[var(--text-main)]">
-                {requestMessage}
-              </pre>
-              <div className="mt-4">
-                <PrimaryButton onClick={copyMessage}>
-                  {copied ? '복사했어요' : '문구 복사하기'}
-                </PrimaryButton>
+          <Card className="mt-3">
+            <pre className="whitespace-pre-wrap break-words text-[14px] leading-relaxed text-[var(--text-main)]">
+              {requestMessage}
+            </pre>
+            <div className="mt-4">
+              <PrimaryButton onClick={copyMessage}>
+                {copied ? '복사했어요' : '문구 복사하기'}
+              </PrimaryButton>
+            </div>
+            <p className="mt-3 text-[12px] text-[var(--text-sub)]">
+              {paid
+                ? '※ AI가 입력하신 약관·상황을 반영해 톤과 근거를 맞춘 맞춤 문구예요.'
+                : '※ 기본 템플릿으로 작성된 문구예요. AI 맞춤 작성·분쟁 서류 패키지는 결제 후 같은 화면에서 잠금 해제돼요.'}
+            </p>
+          </Card>
+
+        </div>
+
+        <div className="mt-10">
+          <div className="flex items-center justify-between">
+            <p className="text-[15px] font-bold text-[var(--text-main)]">
+              분쟁 서류 패키지
+            </p>
+            <span
+              className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold ${
+                paid
+                  ? 'bg-[var(--mint-light)] text-[#0d3d24]'
+                  : 'bg-[var(--bg-main)] text-[var(--text-sub)]'
+              }`}
+            >
+              {paid ? '잠금 해제됨' : '결제 시 발급'}
+            </span>
+          </div>
+          <p className="mt-1 text-[12.5px] leading-relaxed text-[var(--text-sub)]">
+            업체가 환불을 거부하면 다음 단계에서 쓰는 공식 양식 3종이에요. 본인 명의로
+            본인이 직접 발송·접수하시면 됩니다.
+          </p>
+
+          <div className="mt-3 space-y-2">
+            {DISPUTE_DOCS.map((doc) => (
+              <div
+                key={doc.id}
+                className="flex items-start gap-3 rounded-2xl border border-black/[0.06] bg-white p-4"
+              >
+                <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--mint-light)] text-[12px] font-black text-[#0d3d24]">
+                  📄
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[14px] font-bold text-[var(--text-main)]">
+                    {doc.title}
+                  </p>
+                  <p className="mt-0.5 text-[12px] leading-relaxed text-[var(--text-sub)]">
+                    {doc.summary}
+                  </p>
+                </div>
+                {paid ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const text = doc.build({
+                        form,
+                        calc: result.calc,
+                        industryLabel:
+                          INDUSTRIES.find((i) => i.value === form.industry)?.label || '',
+                      })
+                      openPrintWindow(doc.title, text)
+                    }}
+                    className="shrink-0 rounded-full bg-[var(--mint-main)] px-3 py-1.5 text-[12px] font-bold text-[#0d3d24]"
+                  >
+                    양식 열기
+                  </button>
+                ) : (
+                  <span className="shrink-0 rounded-full bg-[var(--bg-main)] px-3 py-1.5 text-[12px] font-bold text-[var(--text-sub)]">
+                    🔒
+                  </span>
+                )}
               </div>
-              {!paid ? (
-                <p className="mt-3 text-[12px] text-[var(--text-sub)]">
-                  ※ 무료 플랜은 카톡용 1종만 제공돼요. 이메일·정식 요청은 결제 시
-                  해제됩니다.
-                </p>
-              ) : null}
-            </Card>
-          ) : (
-            <LockedCard
-              title={`${REQUEST_TYPES.find((t) => t.value === form.requestType)?.label} 문구`}
-              onUnlock={() => setPricingOpen(true)}
-            />
-          )}
+            ))}
+          </div>
+
+          {!paid ? (
+            <button
+              type="button"
+              onClick={() => setPricingOpen(true)}
+              className="mt-4 block w-full rounded-2xl border border-[var(--mint-main)] bg-[var(--mint-light)]/40 p-4 text-left transition hover:bg-[var(--mint-light)]/60"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[14px] font-extrabold text-[var(--text-main)]">
+                    분쟁 서류 + AI 맞춤 문구 잠금 해제
+                  </p>
+                  <p className="mt-1 text-[12px] leading-relaxed text-[var(--text-sub)]">
+                    내용증명, 소비자원 1372 신청서, 카드 항변권 행사 신청서까지 본인 명의로 바로 발송 가능한 양식으로 발급해드려요. AI 맞춤 요청 문구도 같이 열려요.
+                  </p>
+                </div>
+                <div className="shrink-0 text-right">
+                  <p className="text-[15px] font-black text-[var(--text-main)]">
+                    ₩{PRICE_WON.toLocaleString('ko-KR')}
+                  </p>
+                  <p className="text-[11px] text-[var(--text-sub)]">1회 결제</p>
+                </div>
+              </div>
+            </button>
+          ) : null}
+
+          <p className="mt-3 text-[11px] leading-relaxed text-[var(--text-sub)]">
+            ※ 본 양식은 사용자가 <strong>본인 명의로 직접 작성·발송</strong>하시는 보조 양식입니다. 본 서비스는 양식 작성을 보조하는 정보 도구이며, 신고·발송 대리나 법률 자문을 제공하지 않습니다.
+          </p>
         </div>
 
         <div className="mt-6">
