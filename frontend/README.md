@@ -45,33 +45,50 @@ npm run preview    # 빌드 결과 미리보기
 
 **주의 키워드** (`WARNING_KEYWORDS`): `환불 불가`, `환급 불가`, `취소 불가`, `양도만 가능`, `정상가 기준`, `이벤트가`, `할인가`, `위약금`, `소멸`
 
-## 백엔드 연결 가이드
+## 백엔드 연결 가이드 (Backend B 연동 완료)
 
-`submitForm` 안의 `computeRefund(form)` 호출을 아래로 교체하면 됩니다.
+이미 `src/api.js` 에서 Backend B 의 두 API 를 호출하도록 연결돼 있어요.
+환불 금액은 프론트의 임시 로직(`computeRefund`)이 그대로 처리하고, AI 기능만 백엔드를 씁니다.
 
-```js
-const response = await fetch("http://localhost:8000/api/refund/result", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(form),
-});
-const calc = await response.json();
+### 사용하는 엔드포인트
+
+- `POST /api/b/analyze/contract` — 계약서 부당 조항 탐지
+- `POST /api/b/generate/message` — 환불 요청 문구 3종 (카카오톡용 / 이메일용 / 강경대응용)
+- `GET  /api/b/health` — 백엔드 헬스체크 (입력 화면 하단에 표시)
+
+### 동작 방식
+
+1. 사용자가 입력폼 제출 → `computeRefund` 로 환불금/위약금/차이 계산 (로컬)
+2. `vendorPolicyText` 가 있으면 `analyzeContract` 호출 (AI 분석)
+3. `generateMessage` 호출 (AI 문구 3종)
+4. 둘 중 하나라도 실패하면 **자동으로 임시 로직으로 폴백**
+5. 결과 화면에서 `요청 문구 유형` 토글 시 AI 결과가 있으면 AI 텍스트, 없으면 임시 텍스트 표시
+
+### 백엔드 주소 설정
+
+루트에 `.env` 파일 만들고 (예시: `.env.example` 복사):
+
+```
+VITE_API_BASE_URL=http://localhost:8000
 ```
 
-응답 스키마(권장):
+배포 환경(Railway 등)으로 바꿀 때는 이 값만 교체하면 됩니다.
 
-```ts
-{
-  ok: true,
-  totalPaid: number,
-  usageFee: number,
-  penalty: number,
-  expectedRefund: number,
-  vendorGuided: number,
-  diff: number,
-  warnings: string[]
-}
+### 로컬 통합 테스트
+
+별도 터미널에서:
+
+```powershell
+cd ..\backend-b
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python setup.py        # Groq API 키 입력 (gsk_...)
+uvicorn main:app --reload
 ```
+
+그 뒤 프론트(`npm run dev`)로 돌아가서 사용하면 됩니다.
+입력 화면 하단에 `AI 백엔드에 연결됨` 표시가 뜨면 성공.
 
 ## 디자인 토큰
 
