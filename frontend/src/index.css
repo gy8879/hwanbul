@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+:root {
+  --mint-main: #90e6b3;
+  --mint-light: #c9f2d8;
+  --text-main: #191f28;
+  --text-sub: #6b7684;
+  --bg-main: #f9fafb;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-main);
+  color: var(--text-main);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+#root {
+  min-height: 100dvh;
+}
+
+@keyframes floatY {
+  0%, 100% {
+    transform: translateY(0) rotate(var(--rot, 0deg));
+  }
+  50% {
+    transform: translateY(-18px) rotate(var(--rot, 0deg));
+  }
+}
+
+@keyframes floatYInv {
+  0%, 100% {
+    transform: translateY(0) rotate(var(--rot, 0deg));
+  }
+  50% {
+    transform: translateY(18px) rotate(var(--rot, 0deg));
+  }
+}
+
+.float-slow {
+  animation: floatY 6s ease-in-out infinite;
+}
+
+.float-fast {
+  animation: floatY 4.5s ease-in-out infinite;
+  animation-delay: 0.6s;
+}
+
+.float-inv {
+  animation: floatYInv 5.5s ease-in-out infinite;
+  animation-delay: 0.9s;
+}
+
+/* 클립보드: 오른쪽 모서리·두께가 보이도록 비스듬한 3D 기울기 (내부 img는 float 애니메이션 유지) */
+.hero-clipboard-tilt {
+  perspective: 1000px;
+  transform-style: preserve-3d;
+  transform-origin: 78% 85%;
+  transform: rotateY(22deg) rotateX(7deg) rotateZ(-8deg);
+}
+
+@media (min-width: 1024px) {
+  .hero-clipboard-tilt {
+    transform: rotateY(26deg) rotateX(8deg) rotateZ(-9deg);
+  }
+}
+
+/* 히어로 3D PNG의 흰 캔버스 가장자리를 배경(#f9fafb)에 녹임 — 본체는 또렷, 모서리만 약하게 페이드 */
+.hero-asset-img {
+  mix-blend-mode: multiply;
+  mask-image: radial-gradient(
+    ellipse 88% 88% at 50% 50%,
+    #000 82%,
+    transparent 100%
+  );
+  mask-repeat: no-repeat;
+  mask-size: 100% 100%;
+  -webkit-mask-image: radial-gradient(
+    ellipse 88% 88% at 50% 50%,
+    #000 82%,
+    transparent 100%
+  );
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: 100% 100%;
+}
