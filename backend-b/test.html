@@ -62,52 +62,76 @@
       const result = document.getElementById('contractResult');
       result.style.display = 'block';
       result.textContent = '분석 중...';
-      const res = await fetch(`${BASE}/api/b/analyze/contract`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          계약서_텍스트: document.getElementById('contract').value,
-          업종: document.getElementById('industry1').value
-        })
-      });
-      const data = await res.json();
-      result.innerHTML = `
+      try {
+        const res = await fetch(`${BASE}/api/b/analyze/contract`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            계약서_텍스트: document.getElementById('contract').value,
+            업종: document.getElementById('industry1').value
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          result.textContent = `오류: ${data.detail || '알 수 없는 오류가 발생했습니다.'}`;
+          return;
+        }
+        if (!data.탐지된_조항) {
+          result.textContent = 'AI 응답을 처리하지 못했습니다. 다시 시도해주세요.';
+          return;
+        }
+        result.innerHTML = `
 위험도: <span class="${data.위험도 === '높음' ? 'danger' : 'safe'}">${data.위험도}</span>
 부당조항 수: ${data.부당조항_수}개
 총평: ${data.총평}
 
 탐지된 조항:
 ${data.탐지된_조항.map(j => `- "${j.원문}" → ${j.판정} (${j.근거법령})`).join('\n')}
-      `;
+        `;
+      } catch (e) {
+        result.textContent = `네트워크 오류: 서버에 연결할 수 없습니다. (${e.message})`;
+      }
     }
 
     async function generateMessage() {
       const result = document.getElementById('messageResult');
       result.style.display = 'block';
       result.textContent = '문구 생성 중...';
-      const res = await fetch(`${BASE}/api/b/generate/message`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          업종: document.getElementById('industry2').value,
-          업체명: document.getElementById('company').value,
-          결제금액: Number(document.getElementById('price').value),
-          이용일수: Number(document.getElementById('days').value),
-          환불예상금: Number(document.getElementById('refund').value),
-          부당위약금: Number(document.getElementById('penalty').value)
-        })
-      });
-      const data = await res.json();
-      result.innerHTML = `
-📱 카카오톡용:
+      try {
+        const res = await fetch(`${BASE}/api/b/generate/message`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            업종: document.getElementById('industry2').value,
+            업체명: document.getElementById('company').value,
+            결제금액: Number(document.getElementById('price').value),
+            이용일수: Number(document.getElementById('days').value),
+            환불예상금: Number(document.getElementById('refund').value),
+            부당위약금: Number(document.getElementById('penalty').value)
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          result.textContent = `오류: ${data.detail || '알 수 없는 오류가 발생했습니다.'}`;
+          return;
+        }
+        if (!data.카카오톡용) {
+          result.textContent = 'AI 응답을 처리하지 못했습니다. 다시 시도해주세요.';
+          return;
+        }
+        result.innerHTML = `
+카카오톡용:
 ${data.카카오톡용}
 
-📧 이메일용:
+이메일용:
 ${data.이메일용}
 
-⚠️ 강경대응용:
+강경대응용:
 ${data.강경대응용}
-      `;
+        `;
+      } catch (e) {
+        result.textContent = `네트워크 오류: 서버에 연결할 수 없습니다. (${e.message})`;
+      }
     }
   </script>
 </body>

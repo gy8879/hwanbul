@@ -1,19 +1,34 @@
-from fastapi import APIRouter
+import json
+import re
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from services.gemini import call_gemini
+from services.llm import call_llm
 
 router = APIRouter()
 
 class RefundMessageRequest(BaseModel):
-    업종: str              # 예: 헬스장, 필라테스, 학원
+    업종: str
     업체명: str
     결제금액: int
     이용일수: int
-    환불예상금: int        # 백엔드 A에서 받은 값
-    부당위약금: int        # 백엔드 A에서 받은 값
+    환불예상금: int
+    부당위약금: int
 
 @router.post("/generate/message")
 def generate_refund_message(req: RefundMessageRequest):
+    if not req.업종.strip():
+        raise HTTPException(status_code=422, detail="업종을 입력해주세요.")
+    if not req.업체명.strip():
+        raise HTTPException(status_code=422, detail="업체명을 입력해주세요.")
+    if req.결제금액 <= 0:
+        raise HTTPException(status_code=422, detail="결제금액은 0원보다 커야 합니다.")
+    if req.이용일수 < 0:
+        raise HTTPException(status_code=422, detail="이용일수는 0 이상이어야 합니다.")
+    if req.환불예상금 < 0:
+        raise HTTPException(status_code=422, detail="환불예상금은 0 이상이어야 합니다.")
+    if req.부당위약금 < 0:
+        raise HTTPException(status_code=422, detail="부당위약금은 0 이상이어야 합니다.")
+
     prompt = f"""
 당신은 소비자 권리 전문가입니다. 아래 정보를 바탕으로 환불 요청 문구 3가지를 작성해주세요.
 
@@ -37,11 +52,13 @@ def generate_refund_message(req: RefundMessageRequest):
   "강경대응용": "..."
 }}
 """
-    result = call_gemini(prompt)
+    result = call_llm(prompt)
 
-    # Gemini 응답에서 JSON 파싱
-    import json, re
     match = re.search(r'\{.*\}', result, re.DOTALL)
-    if match:
+    if not match:
+        raise HTTPException(status_code=502, detail="AI가 올바른 형식으로 응답하지 않았습니다. 다시 시도해주세요.")
+
+    try:
         return json.loads(match.group())
-    return {"raw": result}
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="AI 응답 파싱에 실패했습니다. 다시 시도해주세요.")

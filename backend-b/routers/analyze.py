@@ -1,6 +1,8 @@
-from fastapi import APIRouter
+import json
+import re
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from services.gemini import call_gemini
+from services.llm import call_llm
 
 router = APIRouter()
 
@@ -10,6 +12,11 @@ class ContractAnalyzeRequest(BaseModel):
 
 @router.post("/analyze/contract")
 def analyze_contract(req: ContractAnalyzeRequest):
+    if not req.계약서_텍스트.strip():
+        raise HTTPException(status_code=422, detail="계약서 텍스트를 입력해주세요.")
+    if not req.업종.strip():
+        raise HTTPException(status_code=422, detail="업종을 입력해주세요.")
+
     prompt = f"""
 당신은 소비자 보호 법률 전문가입니다. 아래 {req.업종} 계약서를 분석해서 부당한 조항을 찾아주세요.
 
@@ -36,10 +43,13 @@ def analyze_contract(req: ContractAnalyzeRequest):
   "총평": "전체 계약서에 대한 한 줄 요약"
 }}
 """
-    result = call_gemini(prompt)
+    result = call_llm(prompt)
 
-    import json, re
     match = re.search(r'\{.*\}', result, re.DOTALL)
-    if match:
+    if not match:
+        raise HTTPException(status_code=502, detail="AI가 올바른 형식으로 응답하지 않았습니다. 다시 시도해주세요.")
+
+    try:
         return json.loads(match.group())
-    return {"raw": result}
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="AI 응답 파싱에 실패했습니다. 다시 시도해주세요.")
